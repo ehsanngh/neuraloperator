@@ -19,7 +19,8 @@ from neuralop.data.datasets import load_darcy_flow_small
 from neuralop.utils import count_model_params
 from neuralop import LpLoss, H1Loss
 
-device = 'cpu'
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
 
 
 # %%
@@ -122,21 +123,21 @@ for index in range(3):
     out = model(x.unsqueeze(0))
 
     ax = fig.add_subplot(3, 3, index*3 + 1)
-    ax.imshow(x[0], cmap='gray')
+    ax.imshow(x[0].cpu(), cmap='gray')
     if index == 0: 
         ax.set_title('Input x')
     plt.xticks([], [])
     plt.yticks([], [])
 
     ax = fig.add_subplot(3, 3, index*3 + 2)
-    ax.imshow(y.squeeze())
+    ax.imshow(y.cpu().squeeze())
     if index == 0: 
         ax.set_title('Ground-truth y')
     plt.xticks([], [])
     plt.yticks([], [])
 
     ax = fig.add_subplot(3, 3, index*3 + 3)
-    ax.imshow(out.squeeze().detach().numpy())
+    ax.imshow(out.squeeze().detach().cpu().numpy())
     if index == 0: 
         ax.set_title('Model prediction')
     plt.xticks([], [])

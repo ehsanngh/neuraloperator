@@ -1,3 +1,7 @@
+click
+platformdirs
+six
+psutil
 wandb
 ruamel.yaml
 configmypy

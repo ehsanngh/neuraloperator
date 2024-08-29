@@ -1,32 +1,56 @@
-from typing import Dict
-
-from ...utils import count_tensor_params
-from .base_transforms import Transform, DictTransform
+from neuralop.data.transforms.data_processors import DataProcessor
 import torch
+from neuralop.data.transforms.base_transforms import Transform
+from neuralop.utils import count_tensor_params
+    
+class RangeNormalizer(Transform):
+    """
+    RangeNormalizer scales data to a specified range [low, high].
+    """
 
-class Normalizer(Transform):
-    def __init__(self, mean, std, eps=1e-6):
-        self.mean = mean
-        self.std = std
-        self.eps = eps
+    def __init__(self, low=0.0, high=1.0):
+        super().__init__()
+        self.low = low
+        self.high = high
+        self.register_buffer("a", None)
+        self.register_buffer("b", None)
+
+    def fit(self, data):
+        min_val = torch.min(data, dim=0)[0].view(-1)
+        max_val = torch.max(data, dim=0)[0].view(-1)
+        self.a = (self.high - self.low) / (max_val - min_val)
+        self.b = -self.a * max_val + self.high
 
     def transform(self, data):
-        return (data - self.mean)/(self.std + self.eps)
-    
-    def inverse_transform(self, data):
-        return (data * (self.std + self.eps)) + self.mean
+        s = data.size()
+        data = data.view(s[0], -1)
+        data = self.a * data + self.b
+        return data.view(s)
 
-    def to(self, device):
-        self.mean = self.mean.to(device)
-        self.std = self.std.to(device)
-    
+    def inverse_transform(self, data):
+        s = data.size()
+        data = data.view(s[0], -1)
+        data = (data - self.b) / self.a
+        return data.view(s)
+
+    def forward(self, data):
+        return self.transform(data)
+
     def cuda(self):
-        self.mean = self.mean.cuda()
-        self.std = self.std.cuda()
+        self.a = self.a.cuda()
+        self.b = self.b.cuda()
+        return self
 
     def cpu(self):
-        self.mean = self.mean.cpu()
-        self.std = self.std.cpu()
+        self.a = self.a.cpu()
+        self.b = self.b.cpu()
+        return self
+
+    def to(self, device):
+        self.a = self.a.to(device)
+        self.b = self.b.to(device)
+        return self
+    
 
 class UnitGaussianNormalizer(Transform):
     """
@@ -164,131 +188,70 @@ class UnitGaussianNormalizer(Transform):
         self.std = self.std.to(device)
         return self
 
-    @classmethod
-    def from_dataset(cls, dataset, dim=None, keys=None, mask=None):
-        """Return a dictionary of normalizer instances, fitted on the given dataset
+
+class CustomDataProcessor(DataProcessor):
+    def __init__(
+        self, in_normalizer=None, out_normalizer=None, positional_encoding=None
+    ):
+        """A simple processor to pre/post process data before training/inferencing a model.
 
         Parameters
         ----------
-        dataset : pytorch dataset
-            each element must be a dict {key: sample}
-            e.g. {'x': input_samples, 'y': target_labels}
-        dim : int list, default is None
-            * If None, reduce over all dims (scalar mean and std)
-            * Otherwise, must include batch-dimensions and all over dims to reduce over
-        keys : str list or None
-            if not None, a normalizer is instanciated only for the given keys
+        in_normalizer : Transform, optional, default is None
+            normalizer (e.g. StandardScaler) for the input samples
+        out_normalizer : Transform, optional, default is None
+            normalizer (e.g. StandardScaler) for the target and predicted samples
+        positional_encoding : Processor, optional, default is None
+            class that appends a positional encoding to the input
         """
-        for i, data_dict in enumerate(dataset):
-            if not i:
-                if not keys:
-                    keys = data_dict.keys()
-        instances = {key: cls(dim=dim, mask=mask) for key in keys}
-        for i, data_dict in enumerate(dataset):
-            for key, sample in data_dict.items():
-                if key in keys:
-                    instances[key].partial_fit(sample.unsqueeze(0))
-        return instances
-
-class DictUnitGaussianNormalizer(DictTransform):
-    """DictUnitGaussianNormalizer composes
-    DictTransform and UnitGaussianNormalizer to normalize different
-    fields of a model output tensor to Gaussian distributions w/
-    mean 0 and unit variance.
-
-        Parameters
-        ----------
-        normalizer_dict : Dict[str, UnitGaussianNormalizer]
-            dictionary of normalizers, keyed to fields
-        input_mappings : Dict[slice]
-            slices of input tensor to grab per field, must share keys with above
-        return_mappings : Dict[slice]
-            _description_
-        """
-    def __init__(self, 
-                 normalizer_dict: Dict[str, UnitGaussianNormalizer],
-                 input_mappings: Dict[str, slice],
-                 return_mappings: Dict[str, slice]):
-        assert set(normalizer_dict.keys()) == set(input_mappings.keys()), \
-            "Error: normalizers and model input fields must be keyed identically"
-        assert set(normalizer_dict.keys()) == set(return_mappings.keys()), \
-            "Error: normalizers and model output fields must be keyed identically"
-
-        super().__init__(transform_dict=normalizer_dict,
-                         input_mappings=input_mappings,
-                         return_mappings=return_mappings)
-    
-    @classmethod
-    def from_dataset(cls, dataset, dim=None, keys=None, mask=None):
-        """Return a dictionary of normalizer instances, fitted on the given dataset
-
-        Parameters
-        ----------
-        dataset : pytorch dataset
-            each element must be a dict {key: sample}
-            e.g. {'x': input_samples, 'y': target_labels}
-        dim : int list, default is None
-            * If None, reduce over all dims (scalar mean and std)
-            * Otherwise, must include batch-dimensions and all over dims to reduce over
-        keys : str list or None
-            if not None, a normalizer is instanciated only for the given keys
-        """
-        for i, data_dict in enumerate(dataset):
-            if not i:
-                if not keys:
-                    keys = data_dict.keys()
-        instances = {key: cls(dim=dim, mask=mask) for key in keys}
-        for i, data_dict in enumerate(dataset):
-            for key, sample in data_dict.items():
-                if key in keys:
-                    instances[key].partial_fit(sample.unsqueeze(0))
-        return instances
-    
-
-class RangeNormalizer(Transform):
-    """
-    RangeNormalizer scales data to a specified range [low, high].
-    """
-
-    def __init__(self, low=0.0, high=1.0):
         super().__init__()
-        self.low = low
-        self.high = high
-        self.register_buffer("a", None)
-        self.register_buffer("b", None)
-
-    def fit(self, data):
-        min_val = torch.min(data, dim=0)[0].view(-1)
-        max_val = torch.max(data, dim=0)[0].view(-1)
-        self.a = (self.high - self.low) / (max_val - min_val)
-        self.b = -self.a * max_val + self.high
-
-    def transform(self, data):
-        s = data.size()
-        data = data.view(s[0], -1)
-        data = self.a * data + self.b
-        return data.view(s)
-
-    def inverse_transform(self, data):
-        s = data.size()
-        data = data.view(s[0], -1)
-        data = (data - self.b) / self.a
-        return data.view(s)
-
-    def forward(self, data):
-        return self.transform(data)
-
-    def cuda(self):
-        self.a = self.a.cuda()
-        self.b = self.b.cuda()
-        return self
-
-    def cpu(self):
-        self.a = self.a.cpu()
-        self.b = self.b.cpu()
-        return self
+        self.in_normalizer = in_normalizer
+        self.out_normalizer = out_normalizer
+        self.positional_encoding = positional_encoding
+        self.device = "cpu"
+        self.model = None
 
     def to(self, device):
-        self.a = self.a.to(device)
-        self.b = self.b.to(device)
+        if self.in_normalizer is not None:
+            self.in_normalizer = self.in_normalizer.to(device)
+        if self.out_normalizer is not None:
+            self.out_normalizer = self.out_normalizer.to(device)
+        self.device = device
         return self
+
+    def preprocess(self, data_dict, batched=True):
+        data_dict = data_dict.copy()
+        x = data_dict["x"].to(self.device)
+        y = data_dict["y"].to(self.device)
+
+        if self.in_normalizer is not None:
+            x = self.in_normalizer.transform(x)
+        if self.positional_encoding is not None:
+            x = self.positional_encoding(x, batched=batched)
+        if self.out_normalizer is not None: # and self.training:
+            y = self.out_normalizer.transform(y)
+
+        data_dict["x"] = x
+        data_dict["y"] = y
+
+        return data_dict
+
+    def postprocess(self, output, data_dict):
+        data_dict = data_dict.copy()
+        x = data_dict["x"].to(self.device)
+        y = data_dict["y"].to(self.device)
+        if self.in_normalizer is not None:
+            x = self.in_normalizer.inverse_transform(x)
+        if self.out_normalizer is not None: #  and not self.training:
+            output = self.out_normalizer.inverse_transform(output)
+            y = self.out_normalizer.inverse_transform(y)
+        data_dict["x"] = x
+        data_dict["y"] = y
+        output = output * (1 - x[:, -1:]) + y * x[:, -1:]
+        return output, data_dict
+
+    def forward(self, **data_dict):
+        data_dict = self.preprocess(data_dict)
+        output = self.model(data_dict["x"])
+        output = self.postprocess(output)
+        return output, data_dict

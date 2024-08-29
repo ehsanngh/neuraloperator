@@ -79,3 +79,18 @@ target/
 
 #Ipython Notebook
 .ipynb_checkpoints
+
+# Others
+.sb
+.out
+.sh
+
+.pkl
+.pt
+.ipynb
+.tgz
+.zip
+.npy
+.npz
+.mat
+.png
